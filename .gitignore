@@ -1,0 +1,9 @@
+# Ignore temporary and log files
+.gemini/
+verify_*.txt
+deep_audit_*.txt
+audit_dataset*.py
+verify_stats.py
+/tmp/
+*.log
+*.tmp
