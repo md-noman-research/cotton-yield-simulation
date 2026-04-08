@@ -4,10 +4,9 @@ import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
 
 # ==============================================================================
-# [7-EXPERT PARALLEL AUDIT] Cotton Stochastic Simulation (Paper v24)
-# Completely aligned with the mathematical methodology in:
-# "Coastal Salinity Resilience in Gossypium barbadense (Suvin) versus Gossypium arboreum (Muslin): 
-# A Stochastic Pre-screening Model Using Bounded Maas-Hoffman Kinetics"
+# Source Code: Stochastic Monte Carlo Simulation
+# Associated Manuscript: Coastal Salinity Resilience in Gossypium barbadense 
+# (Suvin) versus Gossypium arboreum (Muslin)
 # ==============================================================================
 
 # Seed strictly fixed to 42 for reproducibility as claimed in the paper
@@ -39,7 +38,7 @@ yields_muslin = np.zeros(N_ITERATIONS)
 ec_season_arr = np.zeros(N_ITERATIONS)
 t_season_arr = np.zeros(N_ITERATIONS)
 
-print("[SYSTEM]: Firing 500 Monte Carlo Iterations. Assembling AR(1) environments...")
+print("Initializing 500 Monte Carlo Iterations...")
 
 # --- 3. Monte Carlo Loop ---
 for i in range(N_ITERATIONS):
@@ -135,4 +134,4 @@ plt.grid(True, linestyle=':', alpha=0.6)
 
 plt.tight_layout()
 plt.savefig('c:\\recharcs suvin\\volatility_asymmetry_plot.png')
-print("\n[SYSTEM]: Simulation plot saved to volatility_asymmetry_plot.png")
+print("\nSimulation plot saved to volatility_asymmetry_plot.png")
