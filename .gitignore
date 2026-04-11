@@ -1,0 +1,59 @@
+# ── Python cache ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments ──────────────────────────────────────
+venv/
+env/
+.env
+.venv/
+ENV/
+
+# ── Simulation outputs (large CSV data, auto-generated) ───────
+simulation_outputs/
+*.csv
+
+# ── Generated figures (auto-generated, not source code) ───────
+figures/
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+
+# ── DOCX outputs ─────────────────────────────────────────────
+*.docx
+
+# ── Jupyter notebooks checkpoints ────────────────────────────
+.ipynb_checkpoints/
+
+# ── OS files ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor / IDE ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Secrets / credentials (never commit) ─────────────────────
+.env
+*.key
+*.pem
+secrets.json
+config_local.py
+
+# ── Test artifacts ────────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+
+# ── Distribution / packaging ──────────────────────────────────
+dist/
+build/
+*.egg-info/
