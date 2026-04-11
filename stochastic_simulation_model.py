@@ -1,7 +1,7 @@
 """
 stochastic_simulation_model.py
 ================================
-Stochastic Pre-screening Model: Coastal Salinity Resilience in
+Stochastic pre-screening model for coastal salinity resilience —
 Gossypium barbadense (Suvin) vs Gossypium arboreum (Muslin)
 
 Author      : Md. Noman
@@ -9,40 +9,43 @@ Institution : Department of Agricultural Sciences, NSTU, Bangladesh
 GitHub      : https://github.com/md-noman-research/cotton-yield-simulation
 License     : MIT
 
-SIMULATION DISCLOSURE
----------------------
-All outputs produced by this script are generated via stochastic Monte
-Carlo simulation. No field measurements, experimental trials, or empirical
-observations are included. Results are model-based estimates calibrated
-against published Maas-Hoffman (1977) benchmarks and should be interpreted
-accordingly.
+A word on what this script actually does
+-----------------------------------------
+This is a Monte Carlo pre-screening tool, not an analysis of measured field
+data. All yield and fiber quality values it produces are model outputs. The
+point is to get a probabilistic sense of how two quite different cotton
+species — an extra-long-staple tetraploid and a short-staple diploid —
+behave under the variable, non-stationary salinity conditions typical of the
+Noakhali coastal belt before the monsoon arrives.
 
-Description
------------
-Generates N Monte Carlo yield + fiber-quality realizations under AR(1)
-non-stationary salinity forcing (Noakhali pre-monsoon profile) and
-phenologically weighted Maas-Hoffman damage kinetics.
+The salinity environment is simulated as a non-stationary AR(1) process,
+calibrated to the seasonal capillary rise and washout dynamics from SRDI's
+2020 Noakhali survey. Yield loss follows Maas-Hoffman (1977) piecewise
+kinetics, weighted by phenological phase, with a separate temperature
+co-stress term and an interaction penalty for when both stresses hit at once.
+Fiber quality degrades linearly above the salinity threshold, using rates
+from Pettigrew (2004) and Francois et al. (1994).
 
-Key outputs
------------
-1. Yield distributions (mean, SD, variance decomposition)
-2. Fiber quality (staple length, micronaire, bundle strength) by ECe
-3. Point-to-point Maas-Hoffman validation table
-4. Statistical diagnostics (WLS, Gamma GLM, NLS)
-5. CSV exports + SHA-256 integrity log
+Outputs written per run
+-----------------------
+  - Per-species Monte Carlo run tables (CSV)
+  - Point-to-point Maas-Hoffman validation table (CSV)
+  - Analytical fiber quality lookup at discrete ECe checkpoints (CSV)
+  - Aggregate summary statistics + diagnostics (CSV)
+  - SHA-256 integrity log so anyone can verify exact reproducibility (JSON)
 
 Dependencies
 ------------
 numpy>=1.24, scipy>=1.10, statsmodels>=0.14, scikit-learn>=1.3,
 pandas>=2.0, matplotlib>=3.7
 
-Usage
------
+Typical usage
+-------------
     python stochastic_simulation_model.py
     python stochastic_simulation_model.py --n-runs 1000 --seed 99
-    python stochastic_simulation_model.py --output-dir ./results --n-runs 500
+    python stochastic_simulation_model.py --output-dir ./results
 
-All outputs written to ./simulation_outputs/ (default)
+Outputs go to ./simulation_outputs/ by default.
 """
 
 import argparse
@@ -82,7 +85,8 @@ log = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments with safe defaults."""
+    """Read command-line arguments. All parameters have sensible defaults, so
+    running the script with no arguments at all will reproduce the paper results."""
     parser = argparse.ArgumentParser(
         description=(
             "Cotton Coastal Salinity Stochastic Simulation — "
@@ -110,7 +114,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    """Raise ValueError if any argument is outside safe bounds."""
+    """Check that the user has not passed values that would break the model or produce
+    meaningless output (e.g. a one-run simulation, or a season shorter than boll set)."""
     if not (50 <= args.n_runs <= 10_000):
         raise ValueError(f"--n-runs must be between 50 and 10 000, got {args.n_runs}")
     if not (0 <= args.seed <= 2**32 - 1):
@@ -168,24 +173,20 @@ def generate_salinity_trajectory(
     seed_offset: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Non-stationary AR(1) salinity process.
+    Generates a single salinity trajectory for one Monte Carlo realization.
 
-    mu(t) = sigmoid capillary accumulation (SRDI 2020 Noakhali profile)
-    Z(t)  = AR(1) stochastic persistence  (phi=0.80, sigma_eps=1.2 dS/m)
-    R(t)  = sigmoid monsoon washout after day 90 (70% leaching — SRDI 2020)
+    The seasonal background trend (mu) follows a sigmoid that represents
+    capillary salt accumulation over the pre-monsoon period, parameterized
+    to match the Noakhali coastal profile from the SRDI 2020 survey. On top
+    of that, a first-order autoregressive (AR(1)) process adds day-to-day
+    persistence, which is more realistic than independent daily noise.
 
-    Parameters
-    ----------
-    n_days : int
-        Season length in days.
-    seed_offset : int
-        Per-run seed offset for independent realizations.
+    After day 90, a monsoon washout sigmoid kicks in and reduces the effective
+    ECe by roughly 70%, again consistent with SRDI leaching estimates for the
+    region. The final raw ECe is hard-clipped to [0.5, 50] dS/m.
 
-    Returns
-    -------
-    ECe_raw : ndarray, shape (n_days,)  — raw salinity before washout
-    R       : ndarray, shape (n_days,)  — washout reduction factor [0, 1]
-    t       : ndarray, shape (n_days,)  — day index
+    Returns ECe_raw, the washout reduction factor R, and the day index t.
+    Each call with a different seed_offset gives an independent realization.
     """
     rng = np.random.default_rng(seed_offset)
     t = np.arange(1, n_days + 1)
@@ -215,17 +216,14 @@ def generate_temperature_trajectory(
     seed_offset: int = 0,
 ) -> np.ndarray:
     """
-    Stationary AR(1) temperature process.
-    Mean 32°C, phi=0.75, sigma=1.5°C, bounded [20, 45]°C.
+    Generates daily temperature (°C) for one realization.
 
-    Parameters
-    ----------
-    n_days      : int — number of days.
-    seed_offset : int — per-run offset (shifted by 10 000 to decorrelate from salinity RNG).
-
-    Returns
-    -------
-    T : ndarray, shape (n_days,) — daily temperature (°C)
+    A stationary AR(1) process centred at 32°C with a persistence
+    parameter of 0.75 and standard deviation of 1.5°C. The bounds
+    [20, 45] °C prevent physically unreasonable extremes. The seed
+    is shifted by 10 000 relative to the salinity RNG so that salinity
+    and temperature trajectories remain statistically independent within
+    the same run.
     """
     rng = np.random.default_rng(seed_offset + 10_000)
     T = np.zeros(n_days)
@@ -242,14 +240,14 @@ def generate_temperature_trajectory(
 
 def build_phenological_weights(n_days: int = 120) -> np.ndarray:
     """
-    Three-phase sensitivity weighting (normalized):
-      P1 vegetative  (days  1-40) : relative weight 1×
-      P2 boll set    (days 41-80) : relative weight 3×  [critical window]
-      P3 maturation  (days 81-N)  : relative weight 1×
+    Builds the phenological sensitivity weight vector used to compute
+    season-integrated stress exposure.
 
-    Returns
-    -------
-    W : ndarray, shape (n_days,) — weights summing to 1.0
+    Boll set (days 41–80) is weighted three times higher than vegetative
+    or maturation stages. This reflects the well-established finding that
+    salinity during boll initiation causes disproportionate yield penalties
+    in cotton. Weights are normalized so they sum to exactly 1.0, making
+    the weighted sum a proper weighted mean rather than a weighted total.
     """
     raw = np.ones(n_days)
     p2_start = min(40, n_days)
@@ -270,28 +268,23 @@ def compute_yield(
     W_norm: np.ndarray,
 ) -> tuple[float, float, float, float, float]:
     """
-    Single-realization yield under combined salinity + heat stress.
+    Computes yield for a single Monte Carlo realization.
 
-    Steps
-    -----
-    1. EC_season = phenologically weighted ECe after monsoon washout
-    2. T_season  = phenologically weighted temperature
-    3. D_sal     = Maas-Hoffman piecewise × OAM
-    4. D_heat    = exponential saturation above 35°C
-    5. D_total   = D_sal + D_heat + hyper-additive interaction (×1.5)
-    6. Y         = Y_max × max(0, 1 - D_total)
+    First, it applies the monsoon washout to the raw daily ECe, then
+    collapses the 120-day trajectory into a single phenologically weighted
+    season value (EC_season). The same weighting is applied to temperature.
 
-    Parameters
-    ----------
-    ECe_raw : ndarray — raw daily salinity (dS/m)
-    R       : ndarray — washout reduction factor
-    T       : ndarray — daily temperature (°C)
-    params  : dict    — species parameter dictionary
-    W_norm  : ndarray — phenological weights
+    Salinity damage (D_sal) is Maas-Hoffman piecewise, scaled by the
+    species-specific Osmotic Adjustment Modifier. Heat damage (D_heat)
+    saturates exponentially above 35°C. Where both stresses co-occur,
+    an interaction penalty of 1.5× their product is added — this captures
+    the supra-additive stress response documented for cotton under combined
+    heat and salinity.
 
-    Returns
-    -------
-    (Y, EC_season, T_season, D_sal, D_heat)
+    Total damage is capped at 1.0 (i.e., total yield loss). Final yield
+    is Y_max × (1 - D_total), floored at zero.
+
+    Returns Y, EC_season, T_season, D_sal, D_heat.
     """
     ECe_washed = ECe_raw * R
     EC_season  = float(np.dot(ECe_washed, W_norm))
@@ -318,22 +311,17 @@ def compute_fiber_quality(
     params: dict,
 ) -> tuple[float, float, float]:
     """
-    Linear fiber quality degradation above ECe threshold.
+    Estimates fiber quality attributes at the realized EC_season.
 
-    L(EC)   = L_base   × max(0, 1 - k_L × excess_ECe)
-    Mic(EC) = Mic_base + k_M × excess_ECe
-    Str(EC) = Str_base × max(0, 1 - k_S × excess_ECe)
+    All three responses (staple length, micronaire, bundle strength) are
+    assumed to be linear above the Maas-Hoffman threshold. Staple length
+    and bundle strength decline with increasing salinity (fractional loss
+    per dS/m above threshold), while micronaire increases — coarser fibers
+    under stress is a well-documented pattern in salinized cotton.
 
-    Sources: Pettigrew (2004); Ashraf (2002); Francois et al. (1994)
-
-    Parameters
-    ----------
-    EC_season : float — phenologically weighted seasonal ECe (dS/m)
-    params    : dict  — species parameter dictionary
-
-    Returns
-    -------
-    (L, Mic, Str)
+    Degradation rates come from Pettigrew (2004) for G. barbadense-type
+    characteristics and Ashraf (2002) / Francois et al. (1994) for the
+    diploid G. arboreum responses. Returns (staple_mm, micronaire, strength).
     """
     excess = max(0.0, EC_season - params["MH_threshold"])
 
@@ -349,7 +337,8 @@ def compute_fiber_quality(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sha256_file(path: Path) -> str:
-    """Compute SHA-256 hex digest of a file for data integrity verification."""
+    """Returns the SHA-256 hex digest of a file. Used to produce the integrity
+    log so that anyone re-running the script can confirm they got identical output."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(65_536), b""):
@@ -363,8 +352,10 @@ def write_integrity_log(
     run_meta: dict,
 ) -> None:
     """
-    Write JSON integrity log containing SHA-256 hashes of all CSV outputs
-    and run metadata. Allows independent verification of exact reproducibility.
+    Writes a JSON file recording the SHA-256 hash of every CSV produced,
+    along with the run parameters (seed, n_runs, n_days). This is a simple
+    way for a reader or reviewer to verify that their local re-run of the
+    script produced the exact same numbers as what is reported in the paper.
     """
     log_data = {
         "generated_utc"   : datetime.now(timezone.utc).isoformat(),
@@ -387,7 +378,14 @@ def run_variance_decomposition(
     all_results: dict,
     seed: int,
 ) -> dict:
-    """Random Forest variance decomposition (200 trees, max_features='sqrt')."""
+    """
+    Fits a Random Forest (200 trees) to the simulation output and extracts
+    feature importances as a proxy for variance decomposition. The two
+    predictors are EC_season and T_season, so the importances tell us how
+    much of the yield variance is driven by salinity versus temperature
+    across the 500 realizations. Results are consistent across seeds because
+    the underlying simulation data is fully deterministic given SEED.
+    """
     log.info("─" * 65)
     log.info("Variance Decomposition (Random Forest, 200 trees)")
     log.info("─" * 65)
@@ -424,10 +422,19 @@ def run_statistical_diagnostics(
     species_params: dict,
 ) -> dict:
     """
-    Fit three complementary regression models per species:
-      - WLS log-linear (heteroscedasticity-robust)
-      - Gamma GLM with log link (positive-valued yield)
-      - Mechanistic NLS re-fit of Maas-Hoffman piecewise model
+    Runs three complementary statistical models against the simulation data.
+
+    WLS log-linear: heteroscedasticity is expected here because variance
+    grows as ECe increases, so inverse-distance weights are used.
+
+    Gamma GLM: yield is strictly positive and right-skewed, which a normal
+    regression handles poorly. The Gamma with log link is a natural fit.
+
+    Mechanistic NLS: re-fits the Maas-Hoffman model form directly to the
+    simulation scatter, recovering parameter estimates (Y_max, slope,
+    threshold) that can be compared against the literature priors used
+    to build the simulation. Close agreement here is expected and validates
+    internal consistency.
     """
     log.info("─" * 65)
     log.info("Statistical Diagnostics")
@@ -495,9 +502,12 @@ def run_statistical_diagnostics(
 
 def build_mh_validation_table() -> pd.DataFrame:
     """
-    Point-to-point Maas-Hoffman validation at discrete ECe checkpoints.
-    Suvin (OAM=1.00) matches G. hirsutum reference by design.
-    Muslin (OAM=0.60) shows 40% osmotic reduction.
+    Computes the Maas-Hoffman validation table at seven discrete ECe
+    checkpoints. Because Suvin's OAM is set to 1.00, its D_sal values
+    are identical to the G. hirsutum proxy by construction — deviation
+    is zero across all checkpoints. Muslin's OAM of 0.60 means it shows
+    a 40% reduction in salinity damage at every checkpoint, which is
+    the key comparative result reported in the paper.
     """
     ec_checkpoints = [7.7, 8.5, 9.0, 10.0, 12.0, 14.0, 16.0]
     rows = []
@@ -537,7 +547,12 @@ def build_mh_validation_table() -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_fiber_quality_table(species_params: dict) -> pd.DataFrame:
-    """Analytical fiber quality lookup at discrete ECe checkpoints."""
+    """
+    Builds the fiber quality lookup table analytically (no simulation
+    randomness involved), evaluating staple length, micronaire, and bundle
+    strength for both species at six discrete ECe checkpoints. This table
+    underpins Figure 4 and Table 3 in the manuscript.
+    """
     ec_points = [7.7, 8.5, 10.0, 12.0, 14.0, 16.0]
     suv_p = species_params["Suvin (G. barbadense)"]
     mus_p = species_params["Muslin (G. arboreum)"]

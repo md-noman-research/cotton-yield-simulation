@@ -1,8 +1,11 @@
 """
 build_docx.py
 =============
-Converts 26_NOBLE_REVISION.md to 26_NOBLE_REVISION.docx using python-docx.
-Run once: pip install python-docx
+Takes the manuscript markdown file and converts it to a properly formatted
+Word document (.docx) for journal submission. Handles headings, inline bold
+and italic, tables, and paragraph spacing. Requires python-docx.
+
+Install once with: pip install python-docx
 """
 
 import re

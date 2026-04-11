@@ -1,10 +1,11 @@
 """
 generate_figures.py
 ===================
-Generates verified publication figures from actual simulation CSV data.
-ALL values plotted are from real simulation outputs - no hypothetical data.
+Produces the five publication figures for the manuscript. All values plotted
+here are read directly from the simulation CSV outputs — nothing is invented
+or assumed post-hoc. Run stochastic_simulation_model.py first.
 
-Author: Md. Noman, NSTU
+Author: Md. Noman, NSTU, Bangladesh
 """
 
 import pandas as pd
