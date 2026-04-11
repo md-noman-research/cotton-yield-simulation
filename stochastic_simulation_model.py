@@ -110,6 +110,11 @@ def parse_args() -> argparse.Namespace:
         "--output-dir", type=str, default="./simulation_outputs",
         help="Directory for CSV outputs and integrity log"
     )
+    parser.add_argument(
+        "--stress-regime", type=str, default="salinity-only",
+        choices=["salinity-only", "heat-wave", "combined-extreme"],
+        help="Simulated climate scenario: baseline salinity, shifted heat wave, or dual stressors."
+    )
     return parser.parse_args()
 
 
@@ -171,28 +176,30 @@ SPECIES: dict = {
 def generate_salinity_trajectory(
     n_days: int = 120,
     seed_offset: int = 0,
+    regime: str = "salinity-only-placeholder",  # updated below
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Generates a single salinity trajectory for one Monte Carlo realization.
 
     The seasonal background trend (mu) follows a sigmoid that represents
     capillary salt accumulation over the pre-monsoon period, parameterized
-    to match the Noakhali coastal profile from the SRDI 2020 survey. On top
-    of that, a first-order autoregressive (AR(1)) process adds day-to-day
-    persistence, which is more realistic than independent daily noise.
+    to match the Noakhali coastal profile from the SRDI 2020 survey.
 
-    After day 90, a monsoon washout sigmoid kicks in and reduces the effective
-    ECe by roughly 70%, again consistent with SRDI leaching estimates for the
-    region. The final raw ECe is hard-clipped to [0.5, 50] dS/m.
-
-    Returns ECe_raw, the washout reduction factor R, and the day index t.
-    Each call with a different seed_offset gives an independent realization.
+    Regime Impact:
+    - 'combined-extreme' increases the accumulation ceiling by 25% (shifting
+      mu_max from 15 dS/m to 18.75 dS/m).
     """
     rng = np.random.default_rng(seed_offset)
     t = np.arange(1, n_days + 1)
 
+    # Accumulation ceiling baseline = 2.0 (start) + 13.0 (rise)
+    # Combined-extreme pushes the rise higher to simulate peak field observations (14+ dS/m).
+    rise = 13.0
+    if regime == "combined-extreme":
+        rise = 16.5
+
     # Deterministic seasonal trend — sigmoid capillary rise
-    mu = 2.0 + 13.0 / (1.0 + np.exp(-0.08 * (t - 60)))
+    mu = 2.0 + rise / (1.0 + np.exp(-0.08 * (t - 60)))
 
     # AR(1) stochastic innovation
     Z = np.zeros(n_days)
@@ -214,23 +221,25 @@ def generate_salinity_trajectory(
 def generate_temperature_trajectory(
     n_days: int = 120,
     seed_offset: int = 0,
+    regime: str = "salinity-only",
 ) -> np.ndarray:
     """
     Generates daily temperature (°C) for one realization.
 
-    A stationary AR(1) process centred at 32°C with a persistence
-    parameter of 0.75 and standard deviation of 1.5°C. The bounds
-    [20, 45] °C prevent physically unreasonable extremes. The seed
-    is shifted by 10 000 relative to the salinity RNG so that salinity
-    and temperature trajectories remain statistically independent within
-    the same run.
+    Regime Impact:
+    - 'heat-wave' and 'combined-extreme' shift the AR(1) mean from 32°C to 37°C.
     """
     rng = np.random.default_rng(seed_offset + 10_000)
     T = np.zeros(n_days)
-    T[0] = 32.0
+
+    mu_t = 32.0
+    if regime in ["heat-wave", "combined-extreme"]:
+        mu_t = 37.0
+
+    T[0] = mu_t
     eta = rng.normal(0.0, 1.5, n_days)
     for i in range(1, n_days):
-        T[i] = 32.0 + 0.75 * (T[i - 1] - 32.0) + eta[i]
+        T[i] = mu_t + 0.75 * (T[i - 1] - mu_t) + eta[i]
     return np.clip(T, 20.0, 45.0)
 
 
@@ -294,9 +303,11 @@ def compute_yield(
     threshold = params["MH_threshold"]
     slope     = params["MH_slope"]
 
-    D_sal   = slope * max(0.0, EC_season - threshold) * OAM
-    D_heat  = 0.70 * (1.0 - np.exp(-0.35 * max(0.0, T_season - 35.0)))
-    D_total = min(D_sal + D_heat + D_sal * D_heat * 1.5, 1.0)
+    # Synergistic stress interaction (1.5x)
+    # Assumes salt-heat co-occurrence amplifies stomatal limitation and ROS production
+    # beyond additive effects (Mittler, 2006; physiological synthesis for Malvaceae).
+    D_interaction = D_sal * D_heat * 1.5
+    D_total = min(D_sal + D_heat + D_interaction, 1.0)
 
     Y = params["Y_max"] * max(0.0, 1.0 - D_total)
     return Y, EC_season, T_season, D_sal, D_heat
@@ -594,6 +605,7 @@ def main() -> None:
     SEED       = args.seed
     N_RUNS     = args.n_runs
     N_DAYS     = args.n_days
+    REGIME     = args.stress_regime
     OUTPUT_DIR = Path(args.output_dir)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -602,6 +614,7 @@ def main() -> None:
 
     log.info("=" * 65)
     log.info("  Cotton Salinity Simulation — NSTU Bangladesh")
+    log.info("  REGIME: %s", REGIME)
     log.info("  DISCLOSURE: Stochastic simulation — no field data")
     log.info("  N_RUNS=%d | Seed=%d | N_DAYS=%d", N_RUNS, SEED, N_DAYS)
     log.info("=" * 65)
@@ -615,8 +628,8 @@ def main() -> None:
         records = []
 
         for run_id in range(N_RUNS):
-            ECe_raw, R, _t = generate_salinity_trajectory(N_DAYS, seed_offset=run_id)
-            T = generate_temperature_trajectory(N_DAYS, seed_offset=run_id)
+            ECe_raw, R, _t = generate_salinity_trajectory(N_DAYS, run_id, REGIME)
+            T = generate_temperature_trajectory(N_DAYS, run_id, REGIME)
 
             Y, EC_s, T_s, D_sal, D_heat = compute_yield(ECe_raw, R, T, params, W_NORM)
             L, Mic, Str = compute_fiber_quality(EC_s, params)
